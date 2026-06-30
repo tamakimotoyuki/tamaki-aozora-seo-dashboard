@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SEO順位モニター｜たまき青空グループ</title>
+<style>
+  :root{
+    --blue:#0068c4; --green:#5BA640; --red:#D12229;
+    --ink:#1f2937; --sub:#6b7280; --line:#e5e7eb; --bg:#f7f9fc; --card:#fff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans JP","Segoe UI",system-ui,sans-serif;color:var(--ink);background:var(--bg);}
+  header{background:var(--blue);color:#fff;padding:16px 20px;}
+  header h1{margin:0;font-size:18px;font-weight:700}
+  header .meta{font-size:12px;opacity:.9;margin-top:4px}
+  .wrap{max-width:1100px;margin:0 auto;padding:16px 20px 60px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:18px;}
+  h2{font-size:15px;margin:0 0 12px;color:var(--blue);border-left:4px solid var(--green);padding-left:8px}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .tab{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:#fff;cursor:pointer;font-size:13px}
+  .tab.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:7px 8px;text-align:left;border-bottom:1px solid var(--line)}
+  th{color:var(--sub);font-weight:600;font-size:12px}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .up{color:var(--green);font-weight:700}
+  .down{color:var(--red);font-weight:700}
+  .pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;background:#eef2f7;color:var(--sub)}
+  .explorer{display:grid;grid-template-columns:300px 1fr;gap:18px}
+  @media(max-width:760px){.explorer{grid-template-columns:1fr}}
+  input[type=search]{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px}
+  .qlist{max-height:420px;overflow:auto;margin-top:8px;border:1px solid var(--line);border-radius:8px}
+  .qitem{padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px;display:flex;justify-content:space-between;gap:8px}
+  .qitem:hover{background:#f0f6ff}
+  .qitem.on{background:#e6f0fb}
+  .qitem small{color:var(--sub)}
+  .chartbox{min-height:300px}
+  .kpis{display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 10px}
+  .kpi{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+  .kpi b{font-size:18px;color:var(--blue)} .kpi span{display:block;font-size:11px;color:var(--sub)}
+  .muted{color:var(--sub);font-size:12px}
+  svg text{font-size:10px;fill:var(--sub)}
+</style>
+</head>
+<body>
+<header>
+  <h1>SEO順位モニター — たまき青空グループ</h1>
+  <div class="meta" id="meta">読み込み中…</div>
+</header>
+<div class="wrap">
+
+  <div class="card">
+    <h2>騰落ランキング</h2>
+    <div class="tabs" id="tabs">
+      <div class="tab on" data-k="short_r">▲ 上昇（短期）</div>
+      <div class="tab" data-k="short_f">▼ 下落（短期）</div>
+      <div class="tab" data-k="yoy_r">▲ 上昇（前年同月比）</div>
+      <div class="tab" data-k="opp">🎯 低CTRの機会</div>
+    </div>
+    <div id="moverNote" class="muted" style="margin-bottom:8px"></div>
+    <div id="moverTable"></div>
+  </div>
+
+  <div class="card">
+    <h2>クエリ別トレンド（クリックで2年推移）</h2>
+    <div class="explorer">
+      <div>
+        <input type="search" id="search" placeholder="クエリを検索（例：肥満外来）">
+        <div class="qlist" id="qlist"></div>
+      </div>
+      <div>
+        <div id="qtitle" class="muted">左のクエリを選んでください</div>
+        <div class="kpis" id="kpis"></div>
+        <div class="chartbox" id="chart"></div>
+        <div class="muted" id="qfoot"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const fmt = (v,d=1)=> v==null? "—" : (Math.round(v*Math.pow(10,d))/Math.pow(10,d));
+let SERIES=null, MOVERS=null;
+
+async function load(){
+  try{
+    [SERIES, MOVERS] = await Promise.all([
+      fetch('series.json').then(r=>r.json()),
+      fetch('movers.json').then(r=>r.json())
+    ]);
+  }catch(e){
+    document.getElementById('meta').textContent='データ読込エラー（このページはサーバ経由で開いてください）';
+    return;
+  }
+  document.getElementById('meta').textContent =
+    `データ範囲 ${SERIES.months[0]}〜${SERIES.months[SERIES.months.length-1]}（${SERIES.months.length}か月）／収録クエリ ${SERIES.query_count}／更新 ${SERIES.generated}`;
+  renderMovers('short_r');
+  renderList('');
+}
+
+/* ===== 騰落テーブル ===== */
+function moverRows(k){
+  if(k==='opp') return {note:'順位は上位（10位以内）なのに、表示回数の割にクリックされていない＝タイトル/説明文の改善余地が大きいクエリ', rows:MOVERS.opportunities, type:'opp'};
+  if(k==='short_r') return {note:MOVERS.short.label+'：平均掲載順位が上がったクエリ（表示回数30以上に限定）', rows:MOVERS.short.risers, type:'mv'};
+  if(k==='short_f') return {note:MOVERS.short.label+'：平均掲載順位が下がったクエリ（表示回数30以上に限定）', rows:MOVERS.short.fallers, type:'mv'};
+  if(k==='yoy_r') return MOVERS.yoy ? {note:MOVERS.yoy.label+'：前年同月から上がったクエリ', rows:MOVERS.yoy.risers, type:'mv'} : {note:'前年同月のデータがまだありません（積み上げ中）', rows:[], type:'mv'};
+}
+function renderMovers(k){
+  document.querySelectorAll('#tabs .tab').forEach(t=>t.classList.toggle('on',t.dataset.k===k));
+  const {note,rows,type}=moverRows(k);
+  document.getElementById('moverNote').textContent=note;
+  let h='<table><thead><tr>';
+  if(type==='opp'){
+    h+='<th>クエリ</th><th>院</th><th class="num">順位</th><th class="num">表示</th><th class="num">クリック</th><th class="num">CTR%</th></tr></thead><tbody>';
+    rows.forEach(r=>{h+=`<tr><td>${esc(r.query)}</td><td><span class="pill">${esc(r.clinic||'-')}</span></td><td class="num">${fmt(r.pos)}</td><td class="num">${r.imp}</td><td class="num">${r.clk}</td><td class="num">${fmt(r.ctr)}</td></tr>`;});
+  }else{
+    h+='<th>クエリ</th><th>院</th><th class="num">前→今 順位</th><th class="num">騰落</th><th class="num">表示</th><th class="num">CTR%</th></tr></thead><tbody>';
+    rows.forEach(r=>{const cls=r.delta>0?'up':'down';const sign=r.delta>0?'▲+':'▼';
+      h+=`<tr><td>${esc(r.query)}</td><td><span class="pill">${esc(r.clinic||'-')}</span></td><td class="num">${fmt(r.ref_pos)} → ${fmt(r.now_pos)}</td><td class="num ${cls}">${sign}${Math.abs(r.delta)}</td><td class="num">${r.now_imp}</td><td class="num">${fmt(r.now_ctr)}</td></tr>`;});
+  }
+  if(!rows.length) h+='<tr><td colspan="6" class="muted">該当なし</td></tr>';
+  h+='</tbody></table>';
+  document.getElementById('moverTable').innerHTML=h;
+}
+document.getElementById('tabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(t)renderMovers(t.dataset.k);});
+
+/* ===== クエリ一覧＆検索 ===== */
+function renderList(q){
+  const ql=q.trim().toLowerCase();
+  const items=SERIES.queries
+    .filter(x=>!ql||x.query.toLowerCase().includes(ql))
+    .slice(0,300);
+  let h='';
+  items.forEach((x,i)=>{
+    const idx=SERIES.queries.indexOf(x);
+    h+=`<div class="qitem" data-i="${idx}"><span>${esc(x.query)}</span><small>${esc(x.clinic||'')}</small></div>`;
+  });
+  if(!items.length)h='<div class="qitem muted">該当なし</div>';
+  document.getElementById('qlist').innerHTML=h;
+}
+document.getElementById('search').addEventListener('input',e=>renderList(e.target.value));
+document.getElementById('qlist').addEventListener('click',e=>{
+  const it=e.target.closest('.qitem'); if(!it||it.dataset.i==null)return;
+  document.querySelectorAll('.qitem').forEach(n=>n.classList.remove('on'));
+  it.classList.add('on');
+  drawQuery(SERIES.queries[+it.dataset.i]);
+});
+
+/* ===== クエリ詳細（SVG折れ線・順位は1が上） ===== */
+function drawQuery(x){
+  document.getElementById('qtitle').innerHTML=`<b style="font-size:15px;color:var(--ink)">${esc(x.query)}</b> <span class="pill">${esc(x.clinic||'-')}</span>`;
+  const months=SERIES.months, pos=x.pos, imp=x.imp, clk=x.clk;
+  // 最新の非nullを拾う
+  let li=-1; for(let i=pos.length-1;i>=0;i--){if(pos[i]!=null){li=i;break;}}
+  const kpis=document.getElementById('kpis');
+  if(li>=0){
+    const ctr=imp[li]? (clk[li]/imp[li]*100):0;
+    kpis.innerHTML=`<div class="kpi"><b>${fmt(pos[li])}位</b><span>直近(${months[li]})</span></div>
+      <div class="kpi"><b>${imp[li]}</b><span>表示回数</span></div>
+      <div class="kpi"><b>${clk[li]}</b><span>クリック</span></div>
+      <div class="kpi"><b>${fmt(ctr)}%</b><span>CTR</span></div>`;
+  }else kpis.innerHTML='';
+  document.getElementById('qfoot').innerHTML = x.page? `ランディングページ: <a href="${esc(x.page)}" target="_blank" rel="noopener">${esc(x.page)}</a>`:'';
+
+  // SVG
+  const W=720,H=300,padL=34,padR=12,padT=16,padB=28;
+  const xs=months.map((m,i)=>padL+(W-padL-padR)*(months.length<2?0.5:i/(months.length-1)));
+  const observed=pos.filter(v=>v!=null);
+  let yMax=Math.min(50,Math.max(10,Math.ceil(Math.max(...observed||[10]))));
+  const yMin=1;
+  const Y=v=>padT+(H-padT-padB)*((v-yMin)/(yMax-yMin)); // 1が上、大きいほど下
+  // グリッド（順位 1,5,10,...）
+  let g='';
+  const ticks=[1,5,10,20,30,40,50].filter(t=>t<=yMax);
+  ticks.forEach(t=>{g+=`<line x1="${padL}" y1="${Y(t)}" x2="${W-padR}" y2="${Y(t)}" stroke="#eef2f7"/><text x="4" y="${Y(t)+3}">${t}位</text>`;});
+  // X軸ラベル（隔月）
+  months.forEach((m,i)=>{ if(i%2===0||i===months.length-1) g+=`<text x="${xs[i]}" y="${H-8}" text-anchor="middle">${m.slice(2)}</text>`;});
+  // 折れ線（欠測で分割）
+  let path='',pts='',started=false;
+  pos.forEach((v,i)=>{
+    if(v==null){started=false;return;}
+    const X=xs[i],Yv=Y(Math.min(v,yMax));
+    path+=(started?'L':'M')+X+' '+Yv+' '; started=true;
+    pts+=`<circle cx="${X}" cy="${Yv}" r="3" fill="var(--blue)"><title>${m(months,i)}: ${fmt(v)}位 / 表示${imp[i]} / クリック${clk[i]}</title></circle>`;
+  });
+  document.getElementById('chart').innerHTML=
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet">
+       ${g}<path d="${path}" fill="none" stroke="var(--blue)" stroke-width="2"/>${pts}
+     </svg><div class="muted">縦軸＝平均掲載順位（上が上位）。点に乗せると各月の数値。線の途切れ＝その月は表示実績なし。</div>`;
+}
+function m(arr,i){return arr[i];}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+load();
+</script>
+</body>
+</html>
