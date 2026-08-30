@@ -41,7 +41,9 @@
   .kpi{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
   .kpi b{font-size:18px;color:var(--blue)} .kpi span{display:block;font-size:11px;color:var(--sub)}
   .muted{color:var(--sub);font-size:12px}
-  svg text{font-size:10px;fill:var(--sub)}
+  svg text{font-size:15px;fill:var(--sub)}
+  /* スマホでは SVG が縮小表示されるため軸ラベルを大きく（縮小後も視認できるよう）*/
+  @media(max-width:600px){ svg text{font-size:30px} }
 </style>
 </head>
 <body>
@@ -165,7 +167,7 @@ function drawQuery(x){
   document.getElementById('qfoot').innerHTML = x.page? `ランディングページ: <a href="${esc(x.page)}" target="_blank" rel="noopener">${esc(x.page)}</a>`:'';
 
   // SVG
-  const W=720,H=300,padL=34,padR=12,padT=16,padB=28;
+  const W=720,H=300,padL=44,padR=12,padT=16,padB=40;
   const xs=months.map((m,i)=>padL+(W-padL-padR)*(months.length<2?0.5:i/(months.length-1)));
   const observed=pos.filter(v=>v!=null);
   let yMax=Math.min(50,Math.max(10,Math.ceil(Math.max(...observed||[10]))));
@@ -174,9 +176,13 @@ function drawQuery(x){
   // グリッド（順位 1,5,10,...）
   let g='';
   const ticks=[1,5,10,20,30,40,50].filter(t=>t<=yMax);
-  ticks.forEach(t=>{g+=`<line x1="${padL}" y1="${Y(t)}" x2="${W-padR}" y2="${Y(t)}" stroke="#eef2f7"/><text x="4" y="${Y(t)+3}">${t}位</text>`;});
-  // X軸ラベル（隔月）
-  months.forEach((m,i)=>{ if(i%2===0||i===months.length-1) g+=`<text x="${xs[i]}" y="${H-8}" text-anchor="middle">${m.slice(2)}</text>`;});
+  // Y軸ラベルは数値のみ（「位」を付けるとスマホ拡大時にplot領域へはみ出す。単位はグラフ下の注記で補う）
+  ticks.forEach(t=>{g+=`<line x1="${padL}" y1="${Y(t)}" x2="${W-padR}" y2="${Y(t)}" stroke="#eef2f7"/><text x="6" y="${Y(t)+3}">${t}</text>`;});
+  // X軸ラベル（隔月・多い時は間引き）。末尾は直前の目盛に近すぎる時は出さない（スマホでラベルが重なるため）
+  const xstep = months.length>10 ? 3 : 2;
+  const lastI = months.length-1;
+  const showEnd = (lastI % xstep) >= 2; // 末尾が直前の目盛から2ステップ以上離れている時だけ末尾も表示
+  months.forEach((m,i)=>{ if(i%xstep===0||(i===lastI&&showEnd)) g+=`<text x="${xs[i]}" y="${H-10}" text-anchor="middle">${m.slice(2)}</text>`;});
   // 折れ線（欠測で分割）
   let path='',pts='',started=false;
   pos.forEach((v,i)=>{
