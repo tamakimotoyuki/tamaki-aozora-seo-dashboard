@@ -44,6 +44,22 @@
   svg text{font-size:15px;fill:var(--sub)}
   /* スマホでは SVG が縮小表示されるため軸ラベルを大きく（縮小後も視認できるよう）*/
   @media(max-width:600px){ svg text{font-size:30px} }
+
+  /* ===== 徳島実測ヒートマップ ===== */
+  .hm-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+  .hm{border-collapse:collapse;font-size:12px;white-space:nowrap}
+  .hm th,.hm td{padding:0;border-bottom:1px solid var(--line)}
+  .hm th.qh{text-align:left;padding:5px 10px 5px 4px;position:sticky;left:0;background:var(--card);
+            border-right:1px solid var(--line);font-weight:400;max-width:220px;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+  .hm th.qh:hover{background:#f0f6ff}
+  .hm th.dh{padding:6px 4px;color:var(--sub);font-weight:600;font-size:11px;text-align:center}
+  .hm td.cell{width:26px;height:22px;text-align:center;cursor:default}
+  .hm-cell-hi{background:var(--blue)}
+  .hm-cell-mid{background:#8db8e0}
+  .hm-cell-out{background:#e3e6ea}
+  .hm-cell-none{background:transparent}
+  .hm td.rk{color:#fff;font-size:10px;font-weight:700}
+  .hm td.rk.dark{color:var(--ink)}
 </style>
 </head>
 <body>
@@ -65,6 +81,27 @@
     <div id="moverTable"></div>
   </div>
 
+  <div class="card" id="localCard" style="display:none">
+    <h2>徳島県での実測順位（スマホ・SerpApi）</h2>
+    <div class="muted" id="localMeta" style="margin-bottom:8px"></div>
+    <div id="localHeatmap"></div>
+    <div class="muted" style="margin-top:10px">
+      色＝<span style="color:#0068c4;font-weight:700">■上位(1-3位)</span>
+      <span style="color:#8db8e0;font-weight:700">■中位(4-10位)</span>
+      <span style="color:#c7ccd4;font-weight:700">■圏外</span>
+      ・語をクリックすると下に徳島実測の推移と競合が出ます（全国平均は下の「クエリ別トレンド」にも飛びます）。
+      2026-09-06から測定開始のため、過去分はありません。
+    </div>
+    <div id="localDetail" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)"></div>
+  </div>
+
+  <div class="card" id="rivalsCard" style="display:none">
+    <h2>徳島の検索結果を占めているサイト（推移）</h2>
+    <div class="muted" style="margin-bottom:8px">上位10件によく出るホストの、実測日ごとの出現語数。件数が多いほど、その回でよく上位に出ていたサイトです。</div>
+    <div id="rivalsChart"></div>
+    <div class="muted" style="margin-top:8px" id="rivalsLegend"></div>
+  </div>
+
   <div class="card">
     <h2>クエリ別トレンド（クリックで2年推移）</h2>
     <div class="explorer">
@@ -84,7 +121,7 @@
 
 <script>
 const fmt = (v,d=1)=> v==null? "—" : (Math.round(v*Math.pow(10,d))/Math.pow(10,d));
-let SERIES=null, MOVERS=null;
+let SERIES=null, MOVERS=null, LOCAL=null, LOCAL_RANK=null;
 
 async function load(){
   try{
@@ -95,6 +132,21 @@ async function load(){
   }catch(e){
     document.getElementById('meta').textContent='データ読込エラー（このページはサーバ経由で開いてください）';
     return;
+  }
+  // ★徳島実測は別ファイル・別ワークフロー（月2回）で更新される任意カード。
+  //   無くても既存のグラフは動く必要があるので、失敗しても静かにカードを隠すだけにする
+  //   （沈黙する失敗にしない＝コンソールには理由を残す）。
+  try{
+    [LOCAL, LOCAL_RANK] = await Promise.all([
+      fetch('local_series.json').then(r=> r.ok ? r.json() : null),
+      fetch('local_rank.json').then(r=> r.ok ? r.json() : null)
+    ]);
+    if(LOCAL && LOCAL.dates && LOCAL.dates.length){
+      renderLocalHeatmap(LOCAL);
+      renderRivalsTrend(LOCAL);
+    }
+  }catch(e){
+    console.warn('local_series.json / local_rank.json 読込失敗（徳島実測カードは非表示のまま）', e);
   }
   document.getElementById('meta').textContent =
     `データ範囲 ${SERIES.months[0]}〜${SERIES.months[SERIES.months.length-1]}（${SERIES.months.length}か月）／収録クエリ ${SERIES.query_count}／更新 ${SERIES.generated}`;
@@ -129,6 +181,152 @@ function renderMovers(k){
 document.getElementById('tabs').addEventListener('click',e=>{const t=e.target.closest('.tab');if(t)renderMovers(t.dataset.k);});
 
 /* ===== クエリ一覧＆検索 ===== */
+/* ===== 徳島実測ヒートマップ（設計図 #12-4・#13-1⑥）===== */
+function renderLocalHeatmap(local){
+  document.getElementById('localCard').style.display='';
+  document.getElementById('localMeta').textContent =
+    `${local.dates.length}回計測（${local.dates[0]}〜${local.dates[local.dates.length-1]}）／${local.queries.length}語／更新 ${local.generated}`;
+
+  const bandClass = b => b==='上位(1-3位)' ? 'hm-cell-hi' : b==='中位(4-10位)' ? 'hm-cell-mid'
+                   : b==='圏外' ? 'hm-cell-out' : 'hm-cell-none';
+
+  let h = '<div class="hm-scroll"><table class="hm"><thead><tr><th class="qh">クエリ</th>';
+  local.dates.forEach(d=>{ h += `<th class="dh">${esc(d.slice(5))}</th>`; });
+  h += '</tr></thead><tbody>';
+  local.queries.forEach(q=>{
+    h += `<tr><th class="qh" data-q="${esc(q.query)}" title="クリックで詳細">${esc(q.query)}</th>`;
+    q.band.forEach((b,i)=>{
+      const rk = q.rank[i];
+      const cls = bandClass(b);
+      const label = rk==null ? '' : rk;
+      const dark = cls==='hm-cell-mid' || cls==='hm-cell-out';
+      h += `<td class="cell ${cls}"><span class="rk${dark?' dark':''}">${label}</span></td>`;
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table></div>';
+  document.getElementById('localHeatmap').innerHTML = h;
+
+  document.getElementById('localHeatmap').addEventListener('click', e=>{
+    const th = e.target.closest('th.qh'); if(!th) return;
+    renderLocalQueryDetail(th.dataset.q, local);
+    jumpToQuery(th.dataset.q);
+  });
+}
+
+/* ===== 語ごとの拡大表示（設計図 #12-4「② 語ごとのバンプチャート」の簡易版）=====
+   徳島実測は月2回・実測日が増えるほど線が伸びる。今はまだ1点でも、蓄積されると
+   折れ線として意味を持つ設計（過去には遡れない＝2026-09-06が起点。設計図 #13-3）。*/
+function renderLocalQueryDetail(query, local){
+  const q = local.queries.find(x=>x.query===query);
+  const box = document.getElementById('localDetail');
+  if(!q){ box.style.display='none'; return; }
+  box.style.display='';
+
+  const W=680,H=160,padL=34,padR=12,padT=10,padB=24;
+  const dates = local.dates;
+  const X = i => dates.length<2 ? padL+(W-padL-padR)/2 : padL+(W-padL-padR)*i/(dates.length-1);
+  // 徳島実測は10位までしか判定しないため、Yは 1〜10 と「圏外」の11段固定でよい
+  const Y = r => r==null ? H-padB : padT + (H-padT-padB)*((r-1)/9);
+  let path='', dots='';
+  q.rank.forEach((r,i)=>{
+    const x=X(i), y=Y(r);
+    path += (i?'L':'M')+x.toFixed(1)+' '+y.toFixed(1)+' ';
+    dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${r==null?'var(--sub)':'#0068c4'}"/>`;
+  });
+  let g='';
+  [1,5,10].forEach(t=>{ g+=`<line x1="${padL}" x2="${W-padR}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--line)"/><text x="4" y="${Y(t)+3}" font-size="10">${t}</text>`; });
+  g+=`<text x="4" y="${Y(null)+3}" font-size="10">圏外</text>`;
+  dates.forEach((d,i)=>{ g+=`<text x="${X(i)}" y="${H-6}" text-anchor="middle" font-size="10">${esc(d.slice(5))}</text>`; });
+
+  // 「今の競合」＝最新回のスナップショット（local_rank.json）から。全履歴には持たせていない
+  //   （増やすと保存量が語数×実測回数×競合10件で膨らむため、最新だけを持つ設計）。
+  let rivalsHtml = '<span class="muted">最新の競合データがありません</span>';
+  if(LOCAL_RANK){
+    const rr = LOCAL_RANK.results.find(x=>x.query===query);
+    if(rr && rr.rivals && rr.rivals.length){
+      rivalsHtml = rr.rivals.slice(0,6).map(v=>
+        `<span class="pill" title="${esc(v.title||'')}">${v.pos}位 ${esc(v.host)}${v.cls==='yes'?'（他院）':v.cls==='no'?'（ポータル等）':''}</span>`
+      ).join(' ');
+    }
+  }
+
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <b style="font-size:14px;color:var(--ink)">${esc(query)}</b>
+      <span class="muted">徳島実測の推移（${dates.length}回・1位が上／10位までで判定・圏外は下段）</span>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;margin-top:6px">${g}
+      <path d="${path}" fill="none" stroke="#0068c4" stroke-width="2"/>${dots}
+    </svg>
+    <div class="muted" style="margin-top:6px">今の競合（同じ検索結果の上位）：</div>
+    <div style="margin-top:4px">${rivalsHtml}</div>
+  `;
+}
+
+/* ヒートマップの語クリック→下の「クエリ別トレンド」を同じ語にジャンプ（全国平均も見比べられる）*/
+function jumpToQuery(query){
+  const idx = SERIES.queries.findIndex(x=>x.query===query);
+  document.getElementById('search').value = query;
+  renderList(query);
+  if(idx>=0){
+    drawQuery(SERIES.queries[idx]);
+    document.querySelectorAll('.qitem').forEach(n=>n.classList.toggle('on', +n.dataset.i===idx));
+  }else{
+    document.getElementById('qtitle').innerHTML =
+      `<b>${esc(query)}</b> <span class="muted">（Search Consoleにはまだ表示実績がありません＝地名を付けて測っている専門語の可能性）</span>`;
+  }
+  document.getElementById('qtitle').scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+/* ===== 徳島の競合占有推移（設計図 #12-4「③ 占有推移」）=====
+   local_series.json の rivals_by_date（実測日ごとの上位8ホスト・yesのみ）をそのまま線にする。
+   実測日が1回だけの間は「点」に見えるが、ロジックは正しい＝データが増えれば線として伸びる。 */
+function renderRivalsTrend(local){
+  const rbd = local.rivals_by_date || [];
+  if(!rbd.length) return;
+
+  // 全期間を通して登場したホストの集合を作り、各回の出現数（無ければ0）で線を引く
+  const hosts = new Set();
+  rbd.forEach(d => (d.top_rivals||[]).forEach(v=>hosts.add(v.host)));
+  if(!hosts.size) return;
+  document.getElementById('rivalsCard').style.display='';
+
+  const series = [...hosts].map(host=>({
+    host,
+    counts: rbd.map(d=>{
+      const v=(d.top_rivals||[]).find(x=>x.host===host);
+      return v ? v.queries : 0;
+    })
+  })).sort((a,b)=> b.counts[b.counts.length-1]-a.counts[a.counts.length-1]).slice(0,8);
+
+  const W=680,H=220,padL=32,padR=12,padT=10,padB=24;
+  const dates = rbd.map(d=>d.date);
+  const X = i => dates.length<2 ? padL+(W-padL-padR)/2 : padL+(W-padL-padR)*i/(dates.length-1);
+  const maxV = Math.max(1, ...series.flatMap(s=>s.counts));
+  const Y = v => padT + (H-padT-padB)*(1 - v/maxV);
+  const COLORS = ['#0068c4','#5BA640','#D12229','#8db8e0','#c99a3d','#7a5ea8','#2f8f8f','#a85b8f'];
+
+  let g='';
+  [0, Math.round(maxV/2), maxV].forEach(t=>{ g+=`<line x1="${padL}" x2="${W-padR}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--line)"/><text x="4" y="${Y(t)+3}" font-size="10">${t}</text>`; });
+  dates.forEach((d,i)=>{ g+=`<text x="${X(i)}" y="${H-6}" text-anchor="middle" font-size="10">${esc(d.slice(5))}</text>`; });
+
+  let lines='', legend='';
+  series.forEach((s,idx)=>{
+    const c = COLORS[idx % COLORS.length];
+    let path='';
+    s.counts.forEach((v,i)=>{ path += (i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)+' '; });
+    lines += `<path d="${path}" fill="none" stroke="${c}" stroke-width="2" opacity="0.9"/>`;
+    s.counts.forEach((v,i)=>{ lines += `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3" fill="${c}"/>`; });
+    legend += `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">
+      <span style="width:10px;height:10px;background:${c};border-radius:2px;display:inline-block"></span>${esc(s.host)}</span>`;
+  });
+
+  document.getElementById('rivalsChart').innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block">${g}${lines}</svg>`;
+  document.getElementById('rivalsLegend').innerHTML = legend;
+}
+
 function renderList(q){
   const ql=q.trim().toLowerCase();
   const items=SERIES.queries
